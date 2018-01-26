@@ -117,17 +117,19 @@ CREATE OR REPLACE PACKAGE BODY PLSSQLSCOPE_API IS
    END get_object_list;
 
    PROCEDURE gather_identifiers(i_path IN t_objects) IS
+      c_idents SYS_REFCURSOR;
+      TYPE t_results IS TABLE OF gtt_scope_rows%ROWTYPE;
+      l_results_tab t_results;
    BEGIN
       --DELETE FROM gtt_scope_rows;
       dbms_application_info.set_action(action_name => 'Gather Identifiers to analysis');
    
-      INSERT INTO gtt_scope_rows
-         WITH globalsection AS
+      OPEN c_idents FOR q'[WITH globalsection AS
           (SELECT MIN(line) end_line
                  ,object_name
                  ,owner
            FROM   dba_identifiers
-                 ,TABLE(i_path) p
+                 ,TABLE(:i_path) p
            WHERE  object_type = 'PACKAGE BODY'
            AND    TYPE IN ('PROCEDURE', 'FUNCTION')
            AND    usage != 'CALL'
@@ -148,7 +150,7 @@ CREATE OR REPLACE PACKAGE BODY PLSSQLSCOPE_API IS
                  ,'N' tobeignored
                  ,id.type context_type
            FROM   dba_identifiers i
-           JOIN   TABLE(i_path) p
+           JOIN   TABLE(:i_path) p
            ON     (p.objectname = i.object_name AND p.objecttype = i.object_type AND
                   p.objectowner = i.owner)
            JOIN   dba_source s
@@ -176,7 +178,7 @@ CREATE OR REPLACE PACKAGE BODY PLSSQLSCOPE_API IS
                     'LOCAL'
                    ELSE
                     NULL
-                END
+                END placement
          FROM   (SELECT i.name
                        ,i.type
                        ,i.usage
@@ -211,11 +213,44 @@ CREATE OR REPLACE PACKAGE BODY PLSSQLSCOPE_API IS
                        ,NULL context_type
                        ,NULL end_line
                  FROM   dba_errors e
-                       ,TABLE(i_path) p
+                       ,TABLE(:i_path) p
                  WHERE  e.owner = p.objectowner
                  AND    e.name = p.objectname
-                 AND    e.type = p.objecttype);
+                 AND    e.type = p.objecttype)]'
+         USING i_path,i_path,i_path;
    
+      FETCH c_idents BULK COLLECT
+         INTO l_results_tab;
+   
+      FORALL i IN 1 .. l_results_tab.COUNT
+         INSERT INTO gtt_scope_rows
+            (NAME
+            ,TYPE
+            ,usage
+            ,line
+            ,object_type
+            ,object_name
+            ,SOURCE
+            ,owner
+            ,tobeignored
+            ,context_type
+            ,end_line
+            ,placement)
+         VALUES
+            (l_results_tab(i).NAME
+            ,l_results_tab(i).TYPE
+            ,l_results_tab(i).usage
+            ,l_results_tab(i).line
+            ,l_results_tab(i).object_type
+            ,l_results_tab(i).object_name
+            ,l_results_tab(i).SOURCE
+            ,l_results_tab(i).owner
+            ,l_results_tab(i).tobeignored
+            ,l_results_tab(i).context_type
+            ,l_results_tab(i).end_line
+            ,l_results_tab(i).placement);
+   
+      CLOSE c_idents;
    END gather_identifiers;
 
    FUNCTION add_sql_conditions(i_rule_row IN t_scope_rule) RETURN VARCHAR2 IS
@@ -425,7 +460,7 @@ CREATE OR REPLACE PACKAGE BODY PLSSQLSCOPE_API IS
    BEGIN
       dbms_application_info.set_action(action_name => 'Get CSV Exclusions Report Clob');
       o_data := plsqlscope_helper.get_exclusions_csv_report(i_sourcedata => i_source_data);
-      
+   
    END report_to_csvexclusions;
 
    PROCEDURE get_report_data(i_reporter    IN t_reporter_rec
